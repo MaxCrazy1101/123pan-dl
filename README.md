@@ -1,7 +1,39 @@
-# Tauri + Vue + TypeScript
+# 123云盘 GUI下载工具
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+基于 **Tauri 2.0** + **Vue 3** + **Rust** 开发的123云盘第三方桌面客户端。通过模拟安卓客户端协议来绕过123Pan的下载流量限制。该工具可以帮助用户在Windows 系统上方便地下载 123Pan 上的文件，并提供了多种操作功能，如列出文件、下载文件、上传文件、分享文件等。
 
-## Recommended IDE Setup
+## 🚀 主要功能
 
-- [VS Code](https://code.visualstudio.com/) + [Vue - Official](https://marketplace.visualstudio.com/items?itemName=Vue.volar) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- **登录**：使用用户名和密码登录 123Pan 账号。
+- **列出文件**：显示当前目录下的所有文件和文件夹。
+- **下载文件**：通过模拟安卓客户端协议下载文件，绕过流量限制。
+- **上传文件**：将本地文件上传到 123Pan。
+- **分享文件**：生成文件分享链接。
+- **删除文件**：删除指定的文件或文件夹。
+- **创建文件夹**：在当前目录下创建新文件夹。
+
+
+## 🛠️ 快速开始
+
+确保已安装 Node.js (v18+) 和 Rust 环境。
+
+```bash
+# 1. 安装依赖
+pnpm install
+
+# 2. 启动开发环境
+pnpm tauri dev
+
+# 3. 打包构建 (Windows/macOS/Linux)
+pnpm tauri build
+```
+
+## 注意事项
+
+- 请确保在使用过程中网络连接正常。
+- 由于使用了模拟安卓客户端协议，可能会有一定的风险，请谨慎使用。
+- 本工具仅供学习和研究使用，请勿用于非法用途。
+
+## 致谢
+
+感谢 https://github.com/qq54288/123pan 提供的python版代码

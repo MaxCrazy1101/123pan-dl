@@ -21,13 +21,6 @@ pub struct LoginData {
     pub token: String,
 }
 
-// --- 文件列表相关 ---
-#[derive(Serialize, Deserialize, Debug)]
-pub struct FileListResponse {
-    pub code: i32,
-    pub data: Option<FileListData>,
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FileListData {
     #[serde(rename = "InfoList")]

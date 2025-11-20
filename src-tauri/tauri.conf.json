@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "pan-dl",
+  "productName": "123pan-dl",
   "version": "0.1.0",
   "identifier": "123pan.downloader",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "pan-dl",
+        "title": "123pan-dl",
         "width": 800,
         "height": 600
       }
