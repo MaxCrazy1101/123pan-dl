@@ -15,6 +15,8 @@
 
 ## 🛠️ 快速开始
 
+[测试版预编译下载](https://github.com/MaxCrazy1101/123pan-dl/releases/tag/nightly_build/)
+
 确保已安装 Node.js (v18+) 和 Rust 环境。
 
 ```bash
