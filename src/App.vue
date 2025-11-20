@@ -1,8 +1,8 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { save } from '@tauri-apps/plugin-dialog';
+import { save, open, confirm, message } from '@tauri-apps/plugin-dialog';
 
 // --- 状态定义 ---
 const username = ref("");
@@ -16,14 +16,17 @@ const fileList = ref([]);
 const currentPathId = ref(0);
 const pathHistory = ref([0]);
 
-// 下载进度相关
-const downloadStatus = ref({});
+// 任务进度相关
+const downloadStatus = ref({}); // { fileId: { progress, status } }
+const uploadStatus = ref({});   // { filePath: { progress, status, name } }
 
 // --- 生命周期 ---
-let unlisten;
+let unlistenDownload;
+let unlistenUpload;
 
 onMounted(async () => {
-    unlisten = await listen('download-progress', (event) => {
+    // 1. 监听下载进度
+    unlistenDownload = await listen('download-progress', (event) => {
         const { id, progress, status } = event.payload;
         downloadStatus.value[id] = { progress, status };
         if (status === 'finished') {
@@ -35,16 +38,34 @@ onMounted(async () => {
         }
     });
 
+    // 2. 监听上传进度
+    unlistenUpload = await listen('upload-progress', (event) => {
+        const { id, progress, status } = event.payload;
+        const name = id.split(/[/\\]/).pop();
+        uploadStatus.value[id] = { progress, status, name };
+
+        if (status === 'finished') {
+            setTimeout(() => {
+                if (uploadStatus.value[id]?.status === 'finished') {
+                    delete uploadStatus.value[id];
+                    if (Object.keys(uploadStatus.value).length === 0) {
+                        refresh();
+                    }
+                }
+            }, 2000);
+        }
+    });
+
     await checkAutoLogin();
 });
 
 onUnmounted(() => {
-    if (unlisten) unlisten();
+    if (unlistenDownload) unlistenDownload();
+    if (unlistenUpload) unlistenUpload();
 });
 
 // --- 核心逻辑 ---
 
-// 自动登录检查
 async function checkAutoLogin() {
     try {
         isLoading.value = true;
@@ -60,10 +81,9 @@ async function checkAutoLogin() {
     }
 }
 
-// 手动登录
 async function handleLogin() {
     if (!username.value || !password.value) {
-        alert("请输入用户名和密码");
+        await message("请输入用户名和密码", { title: "提示", kind: "warning" });
         return;
     }
     try {
@@ -72,23 +92,22 @@ async function handleLogin() {
             username: username.value,
             password: password.value
         });
-        alert(msg); // 可以考虑把这个弹窗去掉，直接进入
         isLoggedIn.value = true;
         await loadFiles(0);
     } catch (error) {
-        alert("登录失败: " + error);
+        await message("登录失败: " + error, { title: "错误", kind: "error" });
     } finally {
         isLoading.value = false;
     }
 }
 
-// --- 新增：退出登录逻辑 ---
+// 退出登录
 async function handleLogout() {
-    if (!confirm("确定要退出登录吗？")) return;
+    const yes = await confirm("确定要退出登录吗？", { title: '退出确认', kind: 'info' });
+    if (!yes) return;
 
     try {
         await invoke("logout");
-        // 重置状态
         isLoggedIn.value = false;
         fileList.value = [];
         currentPathId.value = 0;
@@ -96,11 +115,10 @@ async function handleLogout() {
         username.value = "";
         password.value = "";
     } catch (e) {
-        alert("退出失败: " + e);
+        await message("退出失败: " + e, { title: "错误", kind: "error" });
     }
 }
 
-// 加载文件列表
 async function loadFiles(parentId) {
     try {
         isFilesLoading.value = true;
@@ -108,19 +126,17 @@ async function loadFiles(parentId) {
         fileList.value = files;
         currentPathId.value = parentId;
     } catch (error) {
-        alert("获取文件列表失败: " + error);
+        await message("获取文件列表失败: " + error, { title: "错误", kind: "error" });
     } finally {
         isFilesLoading.value = false;
     }
 }
 
-// 进入文件夹
 function enterFolder(folderId) {
     pathHistory.value.push(folderId);
     loadFiles(folderId);
 }
 
-// 返回上一级
 function goBack() {
     if (pathHistory.value.length > 1) {
         pathHistory.value.pop();
@@ -129,18 +145,77 @@ function goBack() {
     }
 }
 
-// 刷新当前目录
 function refresh() {
     loadFiles(currentPathId.value);
 }
 
-// 格式化文件大小
 function formatSize(size) {
     if (size > 1048576) return (size / 1048576).toFixed(2) + " MB";
     return (size / 1024).toFixed(2) + " KB";
 }
 
-// 处理下载
+// --- 功能操作 ---
+
+async function handleUpload() {
+    try {
+        const selected = await open({
+            multiple: false,
+            directory: false,
+        });
+
+        if (!selected) return;
+
+        const filePath = selected;
+        const fileName = filePath.split(/[/\\]/).pop();
+
+        uploadStatus.value[filePath] = { progress: 0, status: 'starting', name: fileName };
+
+        await invoke("upload_file", {
+            parentFileId: currentPathId.value,
+            filePath: filePath
+        });
+
+    } catch (error) {
+        await message("上传失败: " + error, { title: "错误", kind: "error" });
+    }
+}
+
+async function handleCreateFolder() {
+    // prompt 目前没有原生插件替代品，暂时保留浏览器原生 prompt
+    const name = prompt("请输入新文件夹名称:", "");
+    if (!name) return;
+
+    try {
+        await invoke("create_folder", {
+            parentFileId: currentPathId.value,
+            folderName: name
+        });
+        refresh();
+    } catch (error) {
+        await message("创建文件夹失败: " + error, { title: "错误", kind: "error" });
+    }
+}
+
+// 删除文件
+async function handleDelete(file) {
+    const yes = await confirm(
+        `确定要删除 "${file.FileName}" 吗？\n注意：文件将移入回收站。`,
+        {
+            title: '删除确认',
+            kind: 'warning'
+        }
+    );
+
+    if (!yes) return; // 如果用户点击取消，直接返回，不执行删除
+
+    try {
+        await invoke("delete_file", { fileId: file.FileId });
+        refresh();
+    } catch (error) {
+        await message("删除失败: " + error, { title: "错误", kind: "error" });
+    }
+}
+
 async function handleDownload(file) {
     try {
         const savePath = await save({
@@ -154,15 +229,43 @@ async function handleDownload(file) {
         await invoke("download_file", {
             fileId: file.FileId,
             fileName: file.FileName,
+            fileType: file.Type,
             etag: file.Etag || "",
-            s3KeyFlag: file.S3KeyFlag || "0", // 传递 S3KeyFlag
+            s3KeyFlag: file.S3KeyFlag || "0",
             size: file.Size,
             savePath: savePath,
         });
 
     } catch (error) {
-        alert("下载启动失败: " + error);
+        await message("下载启动失败: " + error, { title: "错误", kind: "error" });
         delete downloadStatus.value[file.FileId];
+    }
+}
+
+async function handleShare(file) {
+    const pwd = prompt("请输入提取码（可选，留空表示无需提取码）：", "");
+    if (pwd === null) return;
+
+    try {
+        const result = await invoke("share_file", {
+            fileIds: [file.FileId],
+            sharePwd: pwd
+        });
+
+        let copyText = `链接: ${result.share_url}`;
+        if (result.share_pwd) {
+            copyText += ` 提取码: ${result.share_pwd}`;
+        }
+
+        try {
+            await navigator.clipboard.writeText(copyText);
+            await message("分享成功！链接已复制到剪贴板。\n\n" + copyText, { title: "成功", kind: "info" });
+        } catch (err) {
+            prompt("分享成功，请手动复制链接：", copyText);
+        }
+
+    } catch (error) {
+        await message("分享失败: " + error, { title: "错误", kind: "error" });
     }
 }
 </script>
@@ -197,7 +300,8 @@ async function handleDownload(file) {
                     <span class="path-info">ID: {{ currentPathId }}</span>
                 </div>
                 <div class="right-tools">
-                    <!-- 新增退出按钮 -->
+                    <button @click="handleUpload" class="nav-btn primary">⬆ 上传文件</button>
+                    <button @click="handleCreateFolder" class="nav-btn">➕ 新建文件夹</button>
                     <button @click="handleLogout" class="nav-btn danger">退出登录</button>
                 </div>
             </div>
@@ -209,23 +313,23 @@ async function handleDownload(file) {
                 <table v-else>
                     <thead>
                         <tr>
-                            <th style="width: 50%">文件名</th>
-                            <th style="width: 20%">大小</th>
-                            <th style="width: 15%">类型</th>
-                            <th style="width: 15%">操作</th>
+                            <th style="width: 45%">文件名</th>
+                            <th style="width: 15%">大小</th>
+                            <th style="width: 10%">类型</th>
+                            <th style="width: 30%">操作</th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr v-for="file in fileList" :key="file.FileId"
                             @dblclick="file.Type === 1 ? enterFolder(file.FileId) : null">
 
-                            <!-- 文件名列（包含进度条） -->
+                            <!-- 文件名列（包含下载进度条） -->
                             <td class="name-cell">
                                 <div class="file-icon">{{ file.Type === 1 ? '📂' : '📄' }}</div>
                                 <div class="file-info">
-                                    <div class="file-name">{{ file.FileName }}</div>
+                                    <div class="file-name" :title="file.FileName">{{ file.FileName }}</div>
 
-                                    <!-- 进度条组件 -->
+                                    <!-- 下载进度条组件 -->
                                     <div v-if="downloadStatus[file.FileId]" class="progress-wrapper">
                                         <div class="progress-track">
                                             <div class="progress-fill"
@@ -245,19 +349,45 @@ async function handleDownload(file) {
                             <td>{{ file.Type === 1 ? '文件夹' : '文件' }}</td>
 
                             <td>
-                                <button v-if="file.Type === 0" @click="handleDownload(file)"
-                                    class="action-btn download">下载</button>
-                                <button v-else @click="enterFolder(file.FileId)" class="action-btn open">打开</button>
+                                <div class="action-buttons">
+                                    <button v-if="file.Type === 0" @click="handleDownload(file)"
+                                        class="action-btn download">下载</button>
+                                    <button v-else @click="enterFolder(file.FileId)" class="action-btn open">打开</button>
+
+                                    <button @click="handleShare(file)" class="action-btn share">分享</button>
+                                    <button @click="handleDelete(file)" class="action-btn delete">删除</button>
+                                </div>
                             </td>
                         </tr>
                         <tr v-if="fileList.length === 0">
-                            <td colspan="4" style="text-align: center; padding: 20px; color: #888;">
-                                空文件夹
+                            <td colspan="4" style="text-align: center; padding: 40px; color: #888;">
+                                此文件夹为空
                             </td>
                         </tr>
                     </tbody>
                 </table>
             </div>
+
+            <!-- 上传任务面板 -->
+            <div v-if="Object.keys(uploadStatus).length > 0" class="upload-panel">
+                <div class="panel-header">上传任务</div>
+                <div class="panel-body">
+                    <div v-for="(task, path) in uploadStatus" :key="path" class="upload-item">
+                        <div class="upload-name" :title="task.name">{{ task.name }}</div>
+                        <div class="progress-wrapper">
+                            <div class="progress-track">
+                                <div class="progress-fill" :style="{ width: task.progress + '%' }"
+                                    :class="{ 'finished': task.status === 'finished' }"></div>
+                            </div>
+                            <span class="progress-text">
+                                {{ task.status === 'hashing' ? '校验中' : (task.status === 'finished' ? '完成' :
+                                task.progress + '%') }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
         </div>
     </div>
 </template>
@@ -270,7 +400,7 @@ async function handleDownload(file) {
     flex-direction: column;
     background-color: #f5f7fa;
     color: #333;
-    font-family: sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 /* Loading 遮罩 */
@@ -280,7 +410,7 @@ async function handleDownload(file) {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.95);
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -292,7 +422,7 @@ async function handleDownload(file) {
     width: 40px;
     height: 40px;
     border: 4px solid #f3f3f3;
-    border-top: 4px solid #3498db;
+    border-top: 4px solid #409eff;
     border-radius: 50%;
     animation: spin 1s linear infinite;
     margin-bottom: 10px;
@@ -318,29 +448,47 @@ async function handleDownload(file) {
 
 .login-box {
     background: white;
-    padding: 30px;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    width: 300px;
+    padding: 40px;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.05);
+    width: 320px;
     display: flex;
     flex-direction: column;
-    gap: 15px;
+    gap: 20px;
+}
+
+.login-box h2 {
+    margin: 0 0 10px 0;
+    text-align: center;
+    color: #409eff;
 }
 
 .login-box input {
-    padding: 10px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
+    padding: 12px;
+    border: 1px solid #dcdfe6;
+    border-radius: 6px;
+    outline: none;
+    transition: border-color 0.2s;
 }
 
-/* 按钮样式 */
+.login-box input:focus {
+    border-color: #409eff;
+}
+
+/* 按钮通用样式 */
+button {
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+}
+
 .primary-btn {
     background-color: #409eff;
     color: white;
-    padding: 10px;
+    padding: 12px;
     border: none;
-    border-radius: 4px;
-    cursor: pointer;
+    border-radius: 6px;
+    font-weight: 600;
 }
 
 .primary-btn:hover {
@@ -348,30 +496,34 @@ async function handleDownload(file) {
 }
 
 .nav-btn {
-    padding: 6px 12px;
+    padding: 6px 16px;
     background: white;
     border: 1px solid #dcdfe6;
-    border-radius: 4px;
-    cursor: pointer;
-    margin-right: 10px;
-    transition: all 0.2s;
+    border-radius: 6px;
+    margin-left: 10px;
+    color: #606266;
 }
 
 .nav-btn:hover {
-    background-color: #f2f6fc;
-    border-color: #c6e2ff;
     color: #409eff;
+    border-color: #c6e2ff;
+    background-color: #ecf5ff;
 }
 
-.nav-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
+.nav-btn.primary {
+    background-color: #409eff;
+    color: white;
+    border-color: #409eff;
 }
 
-/* 退出按钮样式 */
+.nav-btn.primary:hover {
+    background-color: #66b1ff;
+    border-color: #66b1ff;
+}
+
 .nav-btn.danger {
     color: #f56c6c;
-    border-color: #fde2e2;
+    border-color: #fbc4c4;
     background-color: #fef0f0;
 }
 
@@ -381,22 +533,9 @@ async function handleDownload(file) {
     border-color: #f56c6c;
 }
 
-.action-btn {
-    padding: 4px 10px;
-    border: none;
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 12px;
-}
-
-.action-btn.download {
-    background: #e1f3d8;
-    color: #67c23a;
-}
-
-.action-btn.open {
-    background: #ecf5ff;
-    color: #409eff;
+.nav-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
 }
 
 /* 主界面 */
@@ -407,39 +546,47 @@ async function handleDownload(file) {
 }
 
 .toolbar {
-    padding: 10px 20px;
+    padding: 12px 20px;
     background: white;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid #ebeef5;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
 }
 
 .path-info {
     color: #909399;
-    font-size: 12px;
-    margin-left: 10px;
+    font-size: 13px;
+    margin-left: 15px;
 }
 
-/* 表格样式 */
+/* 文件列表 */
 .file-list-container {
     flex: 1;
     overflow-y: auto;
     padding: 20px;
 }
 
+.loading-files {
+    text-align: center;
+    color: #909399;
+    margin-top: 50px;
+}
+
 table {
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
     background: white;
-    border-radius: 4px;
+    border-radius: 8px;
     overflow: hidden;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
 }
 
 th {
-    background: #fafafa;
-    padding: 12px;
+    background: #f5f7fa;
+    padding: 15px;
     text-align: left;
     font-weight: 600;
     color: #606266;
@@ -447,33 +594,101 @@ th {
 }
 
 td {
-    padding: 12px;
+    padding: 15px;
     border-bottom: 1px solid #ebeef5;
     vertical-align: middle;
 }
 
-tr:hover {
-    background-color: #f5f7fa;
+tr:last-child td {
+    border-bottom: none;
 }
 
-/* 文件名单元格布局 */
+tr:hover {
+    background-color: #fdfdfd;
+}
+
+/* 单元格 */
 .name-cell {
     display: flex;
     align-items: center;
 }
 
 .file-icon {
-    font-size: 20px;
-    margin-right: 10px;
+    font-size: 24px;
+    margin-right: 12px;
 }
 
 .file-info {
     flex: 1;
+    min-width: 0;
 }
 
-/* 进度条样式 */
+.file-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 500;
+}
+
+/* 操作按钮组 */
+.action-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.action-btn {
+    padding: 5px 10px;
+    border: 1px solid #dcdfe6;
+    border-radius: 4px;
+    font-size: 12px;
+    background: white;
+    color: #606266;
+}
+
+.action-btn:hover {
+    border-color: #409eff;
+    color: #409eff;
+}
+
+.action-btn.download {
+    background: #f0f9eb;
+    border-color: #e1f3d8;
+    color: #67c23a;
+}
+
+.action-btn.download:hover {
+    background: #67c23a;
+    color: white;
+    border-color: #67c23a;
+}
+
+.action-btn.share {
+    background: #fdf6ec;
+    border-color: #faecd8;
+    color: #e6a23c;
+}
+
+.action-btn.share:hover {
+    background: #e6a23c;
+    color: white;
+    border-color: #e6a23c;
+}
+
+.action-btn.delete {
+    background: #fef0f0;
+    border-color: #fde2e2;
+    color: #f56c6c;
+}
+
+.action-btn.delete:hover {
+    background: #f56c6c;
+    color: white;
+    border-color: #f56c6c;
+}
+
+/* 进度条通用样式 */
 .progress-wrapper {
-    margin-top: 4px;
+    margin-top: 6px;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -498,8 +713,56 @@ tr:hover {
 }
 
 .progress-text {
-    font-size: 10px;
+    font-size: 11px;
     color: #909399;
-    min-width: 30px;
+    min-width: 35px;
+    text-align: right;
+}
+
+/* 上传面板 */
+.upload-panel {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 320px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    overflow: hidden;
+    border: 1px solid #ebeef5;
+}
+
+.panel-header {
+    padding: 10px 15px;
+    background: #409eff;
+    color: white;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.panel-body {
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 10px;
+}
+
+.upload-item {
+    margin-bottom: 12px;
+    border-bottom: 1px solid #f5f5f5;
+    padding-bottom: 8px;
+}
+
+.upload-item:last-child {
+    margin-bottom: 0;
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.upload-name {
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 4px;
 }
 </style>
