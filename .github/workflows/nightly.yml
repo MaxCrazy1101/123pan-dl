@@ -1,0 +1,89 @@
+name: Nightly Rolling Build
+
+on:
+  push:
+    branches:
+      - main  # 监听主分支的提交
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  # 第一步：清理旧的 Nightly Release，确保"覆盖"效果
+  cleanup-old-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 需要删除 Release 的权限
+    steps:
+      - name: Delete Old Nightly Release and Tag
+        uses: dev-drprasad/delete-tag-and-release@v1.1
+        with:
+          delete_release: true
+          tag_name: nightly_build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true # 如果是第一次运行（Tag不存在），忽略错误
+
+  # 第二步：构建并上传新版本
+  build-and-release:
+    needs: cleanup-old-release # 必须等清理完成后再开始
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # - platform: 'macos-latest'
+            # args: '--target aarch64-apple-darwin'
+          # - platform: 'macos-latest'
+            # args: '--target x86_64-apple-darwin'
+          - platform: 'ubuntu-latest'
+            args: ''
+          - platform: 'windows-latest'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 'lts/*'
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev \
+          libappindicator3-dev \
+          librsvg2-dev \
+          patchelf
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Build and Upload to Nightly
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: nightly_build
+          releaseName: 'Nightly Build (Rolling)'
+          releaseBody: |
+            🚀 **自动滚动构建 (Rolling Release)**
+            
+            - **构建时间**: ${{ github.event.head_commit.timestamp }}
+            - **提交信息**: ${{ github.event.head_commit.message }}
+            - **Commit SHA**: ${{ github.sha }}
+            
+            ⚠️ 此版本由 CI 自动生成，包含最新代码，可能不稳定。
+          releaseDraft: false
+          prerelease: true
+          args: ${{ matrix.args }}

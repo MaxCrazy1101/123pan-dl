@@ -41,6 +41,7 @@ onMounted(async () => {
     // 2. 监听上传进度
     unlistenUpload = await listen('upload-progress', (event) => {
         const { id, progress, status } = event.payload;
+        // 尝试从路径获取文件名用于显示
         const name = id.split(/[/\\]/).pop();
         uploadStatus.value[id] = { progress, status, name };
 
@@ -48,6 +49,7 @@ onMounted(async () => {
             setTimeout(() => {
                 if (uploadStatus.value[id]?.status === 'finished') {
                     delete uploadStatus.value[id];
+                    // 上传完成后自动刷新列表
                     if (Object.keys(uploadStatus.value).length === 0) {
                         refresh();
                     }
@@ -132,6 +134,7 @@ async function loadFiles(parentId) {
     }
 }
 
+// 导航操作
 function enterFolder(folderId) {
     pathHistory.value.push(folderId);
     loadFiles(folderId);
@@ -156,8 +159,10 @@ function formatSize(size) {
 
 // --- 功能操作 ---
 
+// 上传文件
 async function handleUpload() {
     try {
+        // 打开文件选择对话框
         const selected = await open({
             multiple: false,
             directory: false,
@@ -165,11 +170,13 @@ async function handleUpload() {
 
         if (!selected) return;
 
-        const filePath = selected;
+        const filePath = selected; // 选中文件的完整路径
         const fileName = filePath.split(/[/\\]/).pop();
 
+        // 初始化状态
         uploadStatus.value[filePath] = { progress: 0, status: 'starting', name: fileName };
 
+        // 调用后端
         await invoke("upload_file", {
             parentFileId: currentPathId.value,
             filePath: filePath
@@ -180,8 +187,8 @@ async function handleUpload() {
     }
 }
 
+// 新建文件夹
 async function handleCreateFolder() {
-    // prompt 目前没有原生插件替代品，暂时保留浏览器原生 prompt
     const name = prompt("请输入新文件夹名称:", "");
     if (!name) return;
 
@@ -206,7 +213,7 @@ async function handleDelete(file) {
         }
     );
 
-    if (!yes) return; // 如果用户点击取消，直接返回，不执行删除
+    if (!yes) return;
 
     try {
         await invoke("delete_file", { fileId: file.FileId });
@@ -216,6 +223,7 @@ async function handleDelete(file) {
     }
 }
 
+// 下载文件
 async function handleDownload(file) {
     try {
         const savePath = await save({
@@ -242,6 +250,7 @@ async function handleDownload(file) {
     }
 }
 
+// 分享文件
 async function handleShare(file) {
     const pwd = prompt("请输入提取码（可选，留空表示无需提取码）：", "");
     if (pwd === null) return;
@@ -339,7 +348,7 @@ async function handleShare(file) {
                                         </div>
                                         <span class="progress-text">
                                             {{ downloadStatus[file.FileId].status === 'finished' ? '完成' :
-                                            downloadStatus[file.FileId].progress + '%' }}
+                                                downloadStatus[file.FileId].progress + '%' }}
                                         </span>
                                     </div>
                                 </div>
@@ -381,7 +390,7 @@ async function handleShare(file) {
                             </div>
                             <span class="progress-text">
                                 {{ task.status === 'hashing' ? '校验中' : (task.status === 'finished' ? '完成' :
-                                task.progress + '%') }}
+                                    task.progress + '%') }}
                             </span>
                         </div>
                     </div>
@@ -392,15 +401,32 @@ async function handleShare(file) {
     </div>
 </template>
 
+<!-- 全局样式重置 (关键修复) -->
+<style>
+body,
+html {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    /* 禁止外层滚动 */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+</style>
+
 <style scoped>
 /* 基础布局 */
 .app-container {
+    width: 100vw;
     height: 100vh;
     display: flex;
     flex-direction: column;
     background-color: #f5f7fa;
     color: #333;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    box-sizing: border-box;
+    /* 确保容器内不溢出 */
+    overflow: hidden;
 }
 
 /* Loading 遮罩 */
@@ -543,6 +569,7 @@ button {
     display: flex;
     flex-direction: column;
     height: 100%;
+    overflow: hidden;
 }
 
 .toolbar {
@@ -553,6 +580,8 @@ button {
     justify-content: space-between;
     align-items: center;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+    /* 防止工具栏被压缩 */
+    flex-shrink: 0;
 }
 
 .path-info {
@@ -565,7 +594,10 @@ button {
 .file-list-container {
     flex: 1;
     overflow-y: auto;
+    /* 只在这里显示垂直滚动条 */
+    overflow-x: hidden;
     padding: 20px;
+    box-sizing: border-box;
 }
 
 .loading-files {
@@ -591,6 +623,10 @@ th {
     font-weight: 600;
     color: #606266;
     border-bottom: 1px solid #ebeef5;
+    position: sticky;
+    top: 0;
+    /* 表头固定 */
+    z-index: 10;
 }
 
 td {
@@ -730,6 +766,7 @@ tr:hover {
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
     overflow: hidden;
     border: 1px solid #ebeef5;
+    z-index: 100;
 }
 
 .panel-header {
